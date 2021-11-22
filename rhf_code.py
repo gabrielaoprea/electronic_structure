@@ -248,11 +248,11 @@ def first_order(h_0, h_1):
     n = len(h_0)
     eig = np.identity(n)
     psi_1 = np.zeros((n, 1))
-    e_0 = h_0[0, 0]
+    e_0 = h_0[0,0]
     for i in range(1, n):
         g = np.reshape(eig[:,i], (len(eig),1))
         #print(g)
-        psi_1 += (h_1[0, i]/(e_0 - h_0[i,i]))*g
+        psi_1 += (h_1[0,i]/(e_0 - h_0[i,i]))*g
         #print(psi_1)
     e_1 = h_1[0,0]
     return psi_1, e_1
@@ -268,31 +268,80 @@ def mppt(h_tot, h_0, order):
         psi - list of all the eigenstate corrections, starting with the unperturbed eigenstate
         e - list of all energy corrections, starting with 0th order.
     '''
-    n = len(h_tot)
-    h_1 = h_tot-h_0
-    e_0 = h_0[0,0]
-    psi_0 = np.zeros((n,1))
-    psi_0[0,0] = 1
-    psi_1, e_1 = first_order(h_0, h_1)
-    e_2 = psi_0.transpose().dot(h_1).dot(psi_1)[0,0]
-    psi = [psi_0, psi_1]
-    psi_p = [np.delete(psi_0,0,0), np.delete(psi_1, 0, 0)]
-    e = [e_0, e_1, e_2]
-    h_tot_p = project(h_tot)
-    h_0_p = project(h_0)
-    h_1_p = project(h_1)
-    inverse = inv(h_0_p - e_0*np.identity(n-1))
-    for k in range(2, order):
-        s = np.zeros((n-1,1))
-        for r in  range(1, k):
-            s += e[r]*psi_p[k-r]
-        psi_new_p = -inverse.dot(s-h_1_p.dot(psi_p[k-1]))
-        psi_new = np.vstack(([[0]], psi_new_p))
-        psi_p.append(psi_new_p)
-        psi.append(psi_new)
-        e_new = psi_0.transpose().dot(h_1).dot(psi_new)[0,0]
-        e.append(e_new)
-    return psi, e
+    # Get the dimensions of the FCI Hilbert space
+    nfci = h_tot.shape[0]
+
+    # Get perturbation Hamiltonian
+    h_1 = h_tot - h_0
+
+    #######################################################################
+    # HGAB: Here is a modified recursive approach which uses the recursive
+    #       formula for everything including |psi_1>, and also makes more 
+    #       extensive use of numpy arrays.
+    #######################################################################
+    # Let's store the perturbed wave functions in columns of psi_pt
+    psi_pt = np.zeros((nfci,order)) 
+    # Let's store the perturbed energies in another array
+    e_pt   = np.zeros(order)
+
+    # Define zeroth-order energy and wave function
+    psi_pt[0,0] = 1
+    e_pt[0] = np.einsum('j,jk,k',psi_pt[:,0],h_0,psi_pt[:,0])
+
+    # Define projector onto non-model space
+    # Q = I - |0><0|
+    Proj = np.identity(nfci) - psi_pt[:,[0]].dot(psi_pt[:,[0]].T)
+    s,u  = np.linalg.eigh(Proj) # Here are our eigenvalues and eigenvectors of Proj
+    proj_ind = np.argwhere(s==1).flatten() # We want the non-null eigenvectors
+    Q = u[:,proj_ind] # We then extract out the corresponding eigenvalues
+
+    # Let's now define the the inverse of the reference Hamiltonian once 
+    # R = Q (Q^T ( H_0 - E_0) Q )^{-1} * Q.T 
+    R = Q.dot(np.linalg.inv(Q.T.dot(h_0 - np.identity(nfci) * e_pt[0]).dot(Q))).dot(Q.T)
+
+    # Now get first-order wave function from recursive formula
+    for n in range(1,order):
+        # Get the wave function correction
+        psi_pt[:,n] = - (np.einsum('ij,jk,k->i',R,h_1,psi_pt[:,n-1]) - np.einsum('ij,jk,k->i',R,psi_pt[:,n-1:0:-1],e_pt[1:n]))
+        # Get the energy correction
+        e_pt[n]     = psi_pt[:,0].T.dot(h_1).dot(psi_pt[:,n-1])
+
+    #######################################################################
+    # Our final wave functions are stored in the columns of 
+    #     psi_pt[:,:]
+    # and our MPn corrections are stored in the elements of 
+    #     e_pt[:]
+    #######################################################################
+    
+    ## Define zeroth-order energy and wave function
+    #e_0 = h_0[0,0]
+    #psi_0 = np.zeros((nfci,1))
+    #psi_0[0,0] = 1
+
+    ## Define first-order wave function and energy
+    #psi_1, e_1 = first_order(h_0, h_1)
+
+    ## Get second-order correction
+    #e_2 = psi_0.T.dot(h_1).dot(psi_1)[0,0]
+
+    #psi = [psi_0, psi_1]
+    #psi_p = [np.delete(psi_0,0,0), np.delete(psi_1, 0, 0)]
+    #e = [e_0, e_1, e_2]
+    #h_tot_p = project(h_tot)
+    #h_0_p = project(h_0)
+    #h_1_p = project(h_1)
+    #inverse = inv(h_0_p - e_0*np.identity(nfci-1))
+    #for k in range(2, order):
+    #    s = np.zeros((nfci-1,1))
+    #    for r in  range(1, k):
+    #        s += e[r]*psi_p[k-r]
+    #    psi_new_p = inverse.dot(s-h_1_p.dot(psi_p[k-1]))
+    #    psi_new = np.vstack(([[0]], psi_new_p))
+    #    psi_p.append(psi_new_p)
+    #    psi.append(psi_new)
+    #    e_new = psi_0.transpose().dot(h_1).dot(psi_new)[0,0]
+    #    e.append(e_new)
+    return psi_pt, e_pt
 
 def different_lambda(corr_list, l):
     '''
@@ -349,32 +398,44 @@ def plot_e(e):
     plt.show()
 
 mol = gto.M(
-    atom = 'H 0 0 0; H 0 0 1.85',  # in Angstrom
-    basis = '631g',
+    atom = 'H 0 0 0; H 0 0 1',  # in Angstrom
+    unit = 'Bohr',
+    basis = 'sto3g',
     #spin = 1,
 )
 
 myhf = scf.HF(mol)
 myhf.kernel()
 
-fock=myhf.get_fock()
-#print(fock)
-density=myhf.make_rdm1()
-hcore=myhf.get_hcore()
-#print(hcore)
+fock = myhf.get_fock()
+density = myhf.make_rdm1()
+hcore = myhf.get_hcore()
+print(hcore)
 mo_en = myhf.mo_energy
 
 perm = create_permutations(mol)
 perm.reverse()
 orb = myhf.mo_coeff
-#print(orb)
-orb[:,[0, 2]] = orb[:,[2, 0]]
+print(orb)
+#orb[:,[0, 2]] = orb[:,[2, 0]]
 fock_mo = orb.transpose().dot(fock).dot(orb)
 hcore_mo = orb.transpose().dot(hcore).dot(orb)
+# HGAB: Be careful below, you are saving the output of full_fock() to a variable 
+#       called full_fock, so you will redefine the label "full_fock"! 
 full_fock =full_fock(fock_mo, perm)
 ao_reshaped = np.reshape(mol.intor("int2e"),(mol.nao, mol.nao, mol.nao, mol.nao))
 mo_integrals = get_mo_integrals(ao_reshaped, orb)
 nuc = mol.energy_nuc()
 h = get_full_h(hcore_mo, full_fock, mo_integrals, perm, nuc)
+
+print("Full Hamiltonian")
+print(h)
+print("Full Fock")
+print(full_fock)
 psi, e = mppt(h, full_fock, 10)
+
+np.set_printoptions(linewidth=10000,precision=8,suppress=True)
+print("Energy corrections")
 print(e)
+print("MP Energies")
+print(np.cumsum(e))

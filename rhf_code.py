@@ -8,6 +8,7 @@ from numpy.linalg import inv
 from matplotlib import pyplot as plt
 import rhf_perturbation as pt
 
+np.set_printoptions(linewidth=10000,suppress=True,precision=10)
 at_string ='H 0 0 0; H 0 0 {bond_length:.2f}'
 e_list = []
 bond_lengths = np.arange(0.2,4.6,0.05)
@@ -30,12 +31,14 @@ for i in bond_lengths:
     orb = myhf.mo_coeff
     fock_mo = orb.transpose().dot(fock).dot(orb)
     hcore_mo = orb.transpose().dot(hcore).dot(orb)
-    fock = pt.full_fock(fock_mo,perm)
+#    fock = pt.full_fock(fock_mo,perm)
     ao_reshaped = np.reshape(mol.intor("int2e"),(mol.nao, mol.nao, mol.nao, mol.nao))
     mo_integrals = pt.get_mo_integrals(ao_reshaped, orb)
     nuc = mol.energy_nuc()
-    h = pt.get_full_h(hcore_mo, fock, mo_integrals, perm, nuc)
-    psi, e = mppt(h, fock, 10)
+    #h = pt.get_full_h(hcore_mo, fock, mo_integrals, perm, nuc)
+    # HGAB: New function to build Fock and Ham at the same time
+    fock, h = pt.get_full_matrices(nuc, hcore_mo, fock_mo, mo_integrals, perm)
+    psi, e = pt.mppt(h, fock, 10)
     e = list(e)
     e_list.append(e)
 print(e_list)

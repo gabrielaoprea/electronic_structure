@@ -151,20 +151,226 @@ def full_fock(mo_fock, perm):
     Returns:
         Fock matrix in the full Hilbert space
     '''
+    # Extract diagonal of Fock matrix
+    fock_diag = np.diag(mo_fock)
+
+    # Initialise many-body Fock matrix
     n = len(perm)
     fock = np.zeros((n,n))
-    for i in range(n):
-        el = electron_pos(perm[i][0]) + electron_pos(perm[i][1])
-        for j in el:
-            fock[i,i] += mo_fock[j,j]
-    pairs = get_pairs(perm)
-    for i in pairs:
-        if i[2] + i[3] == 1:
-            if i[2] == 1:
-                fock[i[0], i[1]] = mo_fock[i[4][0],i[4][1]]
-            if i[3] == 1:
-                fock[i[0], i[1]] = mo_fock[i[5][0],i[5][1]]
+    for i in range(n): 
+        # Get diagonal terms
+        fock[i,i] = (np.sum(fock_diag[np.argwhere(perm[i][0])]) 
+                   + np.sum(fock_diag[np.argwhere(perm[i][1])]))
+
+        # Save this permutation for reference
+        permi0 = perm[i][0]
+        permi1 = perm[i][1]
+
+        # Loop over unique off-diagonal terms
+        for j in range(i):
+            # Get the "excitation string"
+            exa = np.logical_xor(permi0,perm[j][0])
+            exb = np.logical_xor(permi1,perm[j][1])
+
+            # Get the number of excitations
+            nexa = int(np.sum(exa)/2)
+            nexb = int(np.sum(exb)/2)
+
+            # Decide if we have a non-zero excitation
+            if(nexa + nexb == 1): 
+                # Find the particle-hole excitation
+                if(nexa == 1):
+                    # We have an alpha excitation!
+                    part = np.logical_and(perm[i][0],exa)
+                    hole = np.logical_and(perm[j][0],exa)
+                else:
+                    # We have an beta excitation!
+                    part = np.logical_and(perm[i][1],exb)
+                    hole = np.logical_and(perm[j][1],exb)
+
+                # Save the corresponding Fock matrix element
+                ibra = np.argwhere(part)[0,0]
+                iket = np.argwhere(hole)[0,0]
+                fock[i,j] = mo_fock[ibra,iket] 
+                fock[j,i] = fock[i,j] 
+
     return fock
+
+def get_phase(pbra,pket,pr=False):
+    '''
+    Compute the relative phase of an excitation between two occupation vectors
+
+    Arguments:
+        pbra - Occupation vector of the bra state
+        pket - Occupation vector of the ket state
+    Returns:
+        phase - Integer, -1 or 1, with the relative phase
+    '''
+
+    # Check we've got the right dimensions
+    assert(len(pbra)==len(pket))
+
+    # Determine which occ vector starts furthest to the left, 
+    # this will be our reference
+    if(np.argwhere(pbra)[0] < np.argwhere(pket)[0]):
+        ref = np.array(np.copy(pbra))
+        prt = np.array(np.copy(pket))
+    else:
+        ref = np.array(np.copy(pket))
+        prt = np.array(np.copy(pbra))
+  
+    # Determine the excitation indices by comparing occupation vectors
+    # using bitstring tricks.
+    exci = np.logical_xor(prt,ref,dtype=int)
+    ihole = np.argwhere(np.logical_and(exci,ref)).flatten()
+    ipart = np.argwhere(np.logical_and(exci,prt)).flatten()
+ 
+    # Double check we have the same number of particles and holes, 
+    # and save the number of excitations
+    assert(len(ihole) == len(ipart))
+    nex = len(ihole)
+
+    # Now we count the number of permutations that are required to 
+    # realise the excitation. If odd, we get phase = -1, otherwise phase = 1
+    phase = 1
+    for k in range(nex):
+        i, a = ihole[k], ipart[k]
+        phase *= pow(-1,sum(ref[i+1:a]))
+        ref[i] = 0
+        ref[a] = 1
+
+    return phase
+
+def get_full_matrices(en_nuc, mo_hcore, mo_fock, mo_integrals, perm):
+    '''
+    Compute the Hamiltonian and Fock matrices in the full Hilbert space.
+
+    Combining these tasks into one function minimises the amount of logic
+    we need to do when comparing excitations.
+
+    Returns: 
+        fock, hamiltonian
+    ''' 
+
+    # Extract diagonal of Fock matrix
+    fock_diag  = np.diag(mo_fock)
+    hcore_diag = np.diag(mo_hcore)
+    nmo = len(fock_diag)
+
+    # Initialise many-body Fock matrix
+    n = len(perm)
+    fock        = np.zeros((n,n))
+    hamiltonian = np.zeros((n,n))
+
+    # Loop over permutations
+    for ibra, perm_bra in enumerate(perm):
+        # Get this permutation
+        pbra_a = np.asarray(perm_bra[0]) 
+        pbra_b = np.asarray(perm_bra[1])
+
+        # Find occupied orbitals 
+        occa = np.argwhere(pbra_a).flatten()
+        occb = np.argwhere(pbra_b).flatten()
+
+        # Get diagonal Fock terms
+        fock[ibra,ibra] = np.sum(fock_diag[occa]) + np.sum(fock_diag[occb])
+
+        # Build a effective fock matrix for this reference
+        J  = sum(mo_integrals[k,k,:,:] for k in occa) + sum(mo_integrals[k,k,:,:] for k in occb)
+        Ka = sum(mo_integrals[:,k,k,:] for k in occa) 
+        Kb = sum(mo_integrals[:,k,k,:] for k in occb) 
+        tmpFa = mo_hcore + J - Ka
+        tmpFb = mo_hcore + J - Kb
+    
+        # Save the diagonal Hamiltonian term
+        hamiltonian[ibra,ibra] = (en_nuc + 0.5 * sum(mo_hcore[k,k] + tmpFa[k,k] for k in occa) 
+                                         + 0.5 * sum(mo_hcore[k,k] + tmpFb[k,k] for k in occb)) 
+
+        # Loop over unique off-diagonal terms
+        for iket in range(ibra+1,n):
+            # Get this permutation
+            pket_a = np.asarray(perm[iket][0]) 
+            pket_b = np.asarray(perm[iket][1])
+
+            # Get the "excitation string"
+            exa = np.logical_xor(pbra_a,pket_a)
+            exb = np.logical_xor(pbra_b,pket_b)
+
+            # Get common occupied orbitals
+            comma = np.argwhere(np.logical_and(pbra_a,pket_a)).flatten()
+            commb = np.argwhere(np.logical_and(pbra_b,pket_b)).flatten() 
+
+            # Get the number of excitations
+            nexa = int(np.sum(exa)/2)
+            nexb = int(np.sum(exb)/2)
+
+            # Decide if we have a non-zero excitation
+            if(nexa + nexb == 1): 
+                # Find the particle-hole excitation
+                if(nexa == 1):
+                    # We have an alpha excitation!
+                    hole = np.logical_and(pbra_a,exa)
+                    part = np.logical_and(pket_a,exa)
+                    alpha = True
+                else:
+                    # We have an beta excitation!
+                    hole = np.logical_and(pbra_b,exb)
+                    part = np.logical_and(pket_b,exb)
+                    alpha = False
+
+                i = np.argwhere(hole)[0,0]
+                a = np.argwhere(part)[0,0]
+
+                if(alpha):
+                    hamiltonian[ibra,iket] = tmpFa[i,a]
+                else:
+                    hamiltonian[ibra,iket] = tmpFb[i,a]
+
+            elif(nexa + nexb == 2):
+                # Two excitations, either both alpha, both beta, or one alpha and one beta 
+                if(nexa == 2):
+                    # We have two alpha excitations!
+                    hole = np.logical_and(pbra_a,exa)
+                    part = np.logical_and(pket_a,exa)
+                    # Get indices of the excitation
+                    i, j = np.argwhere(hole).flatten()
+                    a, b = np.argwhere(part).flatten()
+                    # Save the matrix element
+                    hamiltonian[ibra,iket] = mo_integrals[i,a,j,b] - mo_integrals[i,b,j,a]
+                elif(nexb == 2):
+                    # We have two alpha excitations!
+                    hole = np.logical_and(pbra_b,exb)
+                    part = np.logical_and(pket_b,exb)
+                    # Get indices of the excitation
+                    i, j = np.argwhere(hole).flatten()
+                    a, b = np.argwhere(part).flatten()
+                    # Save the matrix element
+                    hamiltonian[ibra,iket] = mo_integrals[i,a,j,b] - mo_integrals[i,b,j,a]
+                else:
+                    # We have one alpha and one beta excitations!
+                    holea = np.logical_and(pbra_a,exa)
+                    holeb = np.logical_and(pbra_b,exb)
+                    parta = np.logical_and(pket_a,exa)
+                    partb = np.logical_and(pket_b,exb)
+                    # Get indices of the excitation
+                    i = np.argwhere(holea).flatten()[0]
+                    j = np.argwhere(holeb).flatten()[0]
+                    a = np.argwhere(parta).flatten()[0]
+                    b = np.argwhere(partb).flatten()[0]
+                    # Save the matrix element
+                    hamiltonian[ibra,iket] = mo_integrals[i,a,j,b]
+
+            # Get relative phase
+            phase  = get_phase(pbra_a,pket_a) * get_phase(pbra_b,pket_b)
+            # And apply to matrix elements
+            fock[ibra,iket]        *= phase
+            hamiltonian[ibra,iket] *= phase
+            
+            # Hermitize...
+            fock[iket,ibra] = fock[ibra,iket] 
+            hamiltonian[iket,ibra] = hamiltonian[ibra,iket]
+
+    return fock, hamiltonian
 
 def get_mo_integrals(ao_integrals, orb):
     '''
@@ -305,6 +511,7 @@ def mppt(h_tot, h_0, order):
         psi_pt[:,n] = - (np.einsum('ij,jk,k->i',R,h_1,psi_pt[:,n-1]) - np.einsum('ij,jk,k->i',R,psi_pt[:,n-1:0:-1],e_pt[1:n]))
         # Get the energy correction
         e_pt[n]     = psi_pt[:,0].T.dot(h_1).dot(psi_pt[:,n-1])
+        print('{:10d} {:20.10f} {:20.10f}'.format(n,e_pt[n],sum(e_pt[:n+1])))
 
     #######################################################################
     # Our final wave functions are stored in the columns of 

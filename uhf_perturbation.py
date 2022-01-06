@@ -177,10 +177,10 @@ def get_full_matrices(en_nuc, mo_hcore_alpha, mo_hcore_beta, mo_fock_alpha, mo_f
         fock[ibra,ibra] = np.sum(fock_diag_a[occa]) + np.sum(fock_diag_b[occb])
 
         # Build a effective fock matrix for this reference
-        Ja = sum(alphas[k,k,:,:] for k in occa) + sum(alpha_beta[:,k,k,:] for k in occa)
-        Jb = sum(betas[k,k,:,:] for k in occb) + sum(alpha_beta[:,k,k,:] for k in occb)
-        Ka = sum(alphas[:,k,k,:] for k in occa) 
-        Kb = sum(betas[:,k,k,:] for k in occb) 
+        Ja = sum(alphas[k,k,:,:] for k in occa) + sum(alpha_beta[k,k,:,:] for k in occa)
+        Jb = sum(betas[k,k,:,:] for k in occb) + sum(alpha_beta[k,k,:,:] for k in occb)
+        Ka = sum(alphas[k,:,k,:] for k in occa) 
+        Kb = sum(betas[k,:,k,:] for k in occb) 
         tmpFa = mo_hcore_alpha + Ja - Ka
         tmpFb = mo_hcore_beta + Jb - Kb
 

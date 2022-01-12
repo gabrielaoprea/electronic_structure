@@ -141,6 +141,7 @@ def get_phase(pbra,pket,pr=False):
         ref[a] = 1
 
     return phase
+
 def get_full_matrices(en_nuc, mo_hcore_alpha, mo_hcore_beta, mo_fock_alpha, mo_fock_beta, alphas, betas, alpha_beta, perm):
     '''
     Compute the Hamiltonian and Fock matrices in the full Hilbert space.
@@ -177,16 +178,22 @@ def get_full_matrices(en_nuc, mo_hcore_alpha, mo_hcore_beta, mo_fock_alpha, mo_f
         fock[ibra,ibra] = np.sum(fock_diag_a[occa]) + np.sum(fock_diag_b[occb])
 
         # Build a effective fock matrix for this reference
-        Ja = sum(alphas[k,k,:,:] for k in occa) + sum(alpha_beta[k,k,:,:] for k in occa)
-        Jb = sum(betas[k,k,:,:] for k in occb) + sum(alpha_beta[k,k,:,:] for k in occb)
-        Ka = sum(alphas[k,:,k,:] for k in occa) 
-        Kb = sum(betas[k,:,k,:] for k in occb) 
+        # HGAB 12-01-2022:
+        # Be careful about the indexing on the ERI integrals. Remember that the indices of the 
+        # alpha_beta object are (alpha,alpha,beta,beta). 
+        Ja = sum(alphas[k,k,:,:] for k in occa) + sum(alpha_beta[:,:,k,k] for k in occb)
+        Jb = sum( betas[k,k,:,:] for k in occb) + sum(alpha_beta[k,k,:,:] for k in occa)
+        # HGAB 12-01-2022:
+        # For the exchange (K) integrals, you also want the contribution K_pq = sum_i (p,i,i,q)
+        Ka = sum(alphas[:,k,k,:] for k in occa) 
+        Kb = sum( betas[:,k,k,:] for k in occb) 
         tmpFa = mo_hcore_alpha + Ja - Ka
-        tmpFb = mo_hcore_beta + Jb - Kb
+        tmpFb = mo_hcore_beta  + Jb - Kb
 
          # Save the diagonal Hamiltonian term
         hamiltonian[ibra,ibra] = (en_nuc + 0.5 * sum(mo_hcore_alpha[k,k] + tmpFa[k,k] for k in occa) 
-                                         + 0.5 * sum(mo_hcore_beta[k,k] + tmpFb[k,k] for k in occb)) 
+                                         + 0.5 * sum( mo_hcore_beta[k,k] + tmpFb[k,k] for k in occb)) 
+
         # Loop over unique off-diagonal terms
         for iket in range(ibra+1,n):
             # Get this permutation
@@ -263,13 +270,15 @@ def get_full_matrices(en_nuc, mo_hcore_alpha, mo_hcore_beta, mo_fock_alpha, mo_f
 
             # Get relative phase
             phase  = get_phase(pbra_a,pket_a) * get_phase(pbra_b,pket_b)
+
             # And apply to matrix elements
             fock[ibra,iket]        *= phase
             hamiltonian[ibra,iket] *= phase
             
             # Hermitize...
-            fock[iket,ibra] = fock[ibra,iket] 
+            fock[iket,ibra]        = fock[ibra,iket] 
             hamiltonian[iket,ibra] = hamiltonian[ibra,iket]
+
     return fock, hamiltonian
 
 def full_fock(mo_fock_alpha, mo_fock_beta, perm):
@@ -312,9 +321,9 @@ def get_mo_integral_set(ao_integrals, orb_1, orb_2, orb_3, orb_4):
     return mo_integrals
 
 def get_mo_integrals(ao_integrals, orb_alpha, orb_beta):
-    alphas = get_mo_integral_set(ao_integrals,orb_alpha, orb_alpha, orb_alpha, orb_alpha)
-    betas = get_mo_integral_set(ao_integrals, orb_beta, orb_beta, orb_beta, orb_beta)
-    alpha_beta = get_mo_integral_set(ao_integrals, orb_alpha, orb_alpha, orb_beta, orb_beta)
+    alphas     = get_mo_integral_set(ao_integrals, orb_alpha, orb_alpha, orb_alpha, orb_alpha)
+    betas      = get_mo_integral_set(ao_integrals, orb_beta,  orb_beta,  orb_beta,  orb_beta)
+    alpha_beta = get_mo_integral_set(ao_integrals, orb_alpha, orb_alpha, orb_beta,  orb_beta)
     return alphas, betas, alpha_beta
 
 def get_full_h(hcore_alpha, hcore_beta, fock, ao_integrals, perm, en_nuc, orb_alpha, orb_beta):

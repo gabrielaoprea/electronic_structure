@@ -537,13 +537,15 @@ def degenerate_pt(h_tot, h_0, order):
             h0[[0, ref_state],:] = h0[[ref_state, 0],:]
             htot[:,[0, ref_state]] = htot[:,[ref_state, 0]]
             htot[[0, ref_state],:] = htot[[ref_state, 0],:]
-            for degenerate_state in i:
+            for degenerate_state in reversed(i):
                 if degenerate_state!=ref_state:
                     h0 = np.delete(h0, degenerate_state, 0)
                     h0 = np.delete(h0, degenerate_state, 1)
                     htot = np.delete(htot, degenerate_state, 0)
-                    htot = np.delete(htot, degenerate_state, 1)       
+                    htot = np.delete(htot, degenerate_state, 1)     
+            print(ref_state)
             psi, e = mppt(htot, h0, order)
+            print(e)
             psi_pt.append(psi)
             e_pt.append(e)
     return psi_pt, e_pt

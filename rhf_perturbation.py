@@ -199,7 +199,6 @@ def full_fock(mo_fock, perm):
 def get_phase(pbra,pket,pr=False):
     '''
     Compute the relative phase of an excitation between two occupation vectors
-
     Arguments:
         pbra - Occupation vector of the bra state
         pket - Occupation vector of the ket state
@@ -244,10 +243,8 @@ def get_phase(pbra,pket,pr=False):
 def get_full_matrices(en_nuc, mo_hcore, mo_fock, mo_integrals, perm):
     '''
     Compute the Hamiltonian and Fock matrices in the full Hilbert space.
-
     Combining these tasks into one function minimises the amount of logic
     we need to do when comparing excitations.
-
     Returns: 
         fock, hamiltonian
     ''' 
@@ -511,7 +508,7 @@ def mppt(h_tot, h_0, order):
         psi_pt[:,n] = - (np.einsum('ij,jk,k->i',R,h_1,psi_pt[:,n-1]) - np.einsum('ij,jk,k->i',R,psi_pt[:,n-1:0:-1],e_pt[1:n]))
         # Get the energy correction
         e_pt[n]     = psi_pt[:,0].T.dot(h_1).dot(psi_pt[:,n-1])
-        print('{:10d} {:20.10f} {:20.10f}'.format(n,e_pt[n],sum(e_pt[:n+1])))
+        #print('{:10d} {:20.10f} {:20.10f}'.format(n,e_pt[n],sum(e_pt[:n+1])))
 
     #######################################################################
     # Our final wave functions are stored in the columns of 
@@ -574,3 +571,87 @@ def plot_e(e):
     plt.ylabel("Energy correction")
     plt.title("Energy corrections for H2 bond length = 0.74 Angstrom")
     plt.show()
+
+def get_degeneracies(h_0, h_1):
+    '''
+    Gets all groups of degeneracies i.e. returns list of lists with all states that have 
+    the same energy.
+    '''
+    nfci = h_0.shape[0]
+    list_deg = []
+    list_j = []
+    for i in range(nfci):
+        list_i = []
+        if i in list_j:
+            continue
+        for j in range(i,nfci):
+            if (abs(h_0[i,i] - h_0[j,j])<0.0001):
+                list_i.append(j)
+                list_j.append(j)
+        if len(list_i)>1:
+            list_deg.append(list_i)
+    return list_deg
+
+def get_deg_zeroth(h_0, h_1, list_deg):
+    '''
+    Gets the linear combinations of the degenerate eigenstates that diagonalise H1.
+    '''
+    n = len(list_deg)
+    h_0_deg = np.zeros((n,n))
+    h_1_deg = np.zeros((n,n))
+    for i in range(n):
+        for j in range(n):
+            h_0_deg[i,j] = h_0[list_deg[i], list_deg[j]]
+            h_1_deg[i,j] = h_1[list_deg[i], list_deg[j]]
+    sol = np.linalg.eigh(h_1_deg)
+    eigval = sol[0]
+    eigvec = sol[1]
+    return eigval, eigvec
+
+def degenerate_pt(h_tot, h_0, order):
+    '''
+    Identifies all states that are degenerate in H0 and performs degenerate perturbation theory for
+    all groups of degeneracy. Returns a a list with energy corrections for all states + list with all
+    eigenstate corrections.
+    '''
+    h_1 = h_tot-h_0
+    nfci = h_0.shape[0]
+    e_pt = []
+    psi_pt = []
+    eigenvalues = np.identity(nfci)
+    degeneracy_groups = get_degeneracies(h_0, h_1)
+    print(degeneracy_groups)
+    for i in degeneracy_groups:
+        eigval, eigvec = get_deg_zeroth(h_0, h_1, i)
+        n = len(i)
+        for j in range(n):
+            for k in range(n):
+                eigenvalues[i[j],i[k]] = eigvec[j,k]
+        print('Trans')
+        print(eigenvalues)
+        print(eigenvalues[20])
+        print(eigvec)
+        h_tot_new = eigenvalues.T.dot(h_tot).dot(eigenvalues)
+        h_0_new = eigenvalues.T.dot(h_0).dot(eigenvalues)
+        #print('New h')
+        #print(h_tot_new)
+        #print(h_0_new)
+        for ref_state in i:
+            h0 = np.copy(h_0_new)
+            htot = np.copy(h_tot_new)
+            h0[:,[0, ref_state]] = h0[:,[ref_state, 0]]
+            h0[[0, ref_state],:] = h0[[ref_state, 0],:]
+            htot[:,[0, ref_state]] = htot[:,[ref_state, 0]]
+            htot[[0, ref_state],:] = htot[[ref_state, 0],:]
+            for degenerate_state in reversed(i):
+                if degenerate_state!=ref_state:
+                    h0 = np.delete(h0, degenerate_state, 0)
+                    h0 = np.delete(h0, degenerate_state, 1)
+                    htot = np.delete(htot, degenerate_state, 0)
+                    htot = np.delete(htot, degenerate_state, 1)  
+            print(ref_state)
+            psi, e = mppt(htot, h0, order)
+            print(e)
+            psi_pt.append(psi)
+            e_pt.append(e)
+    return psi_pt, e_pt

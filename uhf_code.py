@@ -47,12 +47,3 @@ for i in bond_lengths:
     full, h = pt.get_full_matrices(nuc, hcore_mo_alpha, hcore_mo_beta, fock_mo_alpha, fock_mo_beta,alphas, betas, alpha_beta, perm)
     #h = pt.get_full_h(hcore_mo_alpha, hcore_mo_beta, full, ao_reshaped, perm, nuc, orb_alpha, orb_beta)
     psi, e = pt.degenerate_pt(h, full, 10)
-    #if i == 0.2:
-    #    e_list = np.copy(e)
-    #else:
-    #    e_list = np.vstack([e_list, e])
-    print('Fock')
-    print(full)
-    print('H')
-    print(h)
-    print(np.diagonal(h))

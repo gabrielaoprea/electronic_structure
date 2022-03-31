@@ -240,6 +240,59 @@ def get_phase(pbra,pket,pr=False):
 
     return phase
 
+def get_spin(perm):
+    n = len(perm)
+    spin = np.zeros((n,n))
+    for ibra, perm_bra in enumerate(perm):
+        #Get this permutation
+        pbra_a = np.asarray(perm_bra[0]) 
+        pbra_b = np.asarray(perm_bra[1])
+
+        #Find number of unpaired electrons
+        n_unp =  np.sum(np.abs(pbra_a - pbra_b))
+
+        #Get diagonal spin terms
+        spin[ibra, ibra] = n_unp/2
+
+        #Loop over unique off-diagonal terms
+        for iket in range(ibra+1, n):
+            #Get this permutation
+            pket_a = np.asarray(perm[iket][0]) 
+            pket_b = np.asarray(perm[iket][1])
+
+            # Get the "excitation string"
+            exa = np.logical_xor(pbra_a,pket_a)
+            exb = np.logical_xor(pbra_b,pket_b)
+
+            # Get common occupied orbitals
+            comma = np.argwhere(np.logical_and(pbra_a,pket_a)).flatten()
+            commb = np.argwhere(np.logical_and(pbra_b,pket_b)).flatten() 
+
+            # Get the number of excitations
+            nexa = int(np.sum(exa)/2)
+            nexb = int(np.sum(exb)/2)
+
+            if nexa == 1 and nexb == 1:
+                holea = np.logical_and(pbra_a,exa)
+                holeb = np.logical_and(pbra_b,exb)
+                parta = np.logical_and(pket_a,exa)
+                partb = np.logical_and(pket_b,exb)
+                # Get indices of the excitation
+                i = np.argwhere(holea).flatten()[0]
+                j = np.argwhere(holeb).flatten()[0]
+                a = np.argwhere(parta).flatten()[0]
+                b = np.argwhere(partb).flatten()[0]
+                if i == b and j == a:
+                    spin[ibra,iket] = -1
+            # Get relative phase
+            phase  = get_phase(pbra_a,pket_a) * get_phase(pbra_b,pket_b)
+            # And apply to matrix elements
+            spin[ibra,iket]        *= phase
+            
+            # Hermitize...
+            spin[iket,ibra] = spin[ibra,iket] 
+    return spin
+
 def get_full_matrices(en_nuc, mo_hcore, mo_fock, mo_integrals, perm):
     '''
     Compute the Hamiltonian and Fock matrices in the full Hilbert space.
@@ -460,13 +513,14 @@ def first_order(h_0, h_1):
     e_1 = h_1[0,0]
     return psi_1, e_1
 
-def mppt(h_tot, h_0, order):
+def mppt(h_tot, h_0, order, epsilon):
     '''
     Performs the perturbation theory.
     Arguments:
         h_tot - full Hamiltonian in the Hilbert space
         h_0 - unperturbed Hamiltonian, usually the Fock matrix
         order - the numberof corrections that will be calculated
+        epsilon - level shift; use 0 if no level shift needed
     Returns:
         psi - list of all the eigenstate corrections, starting with the unperturbed eigenstate
         e - list of all energy corrections, starting with 0th order.
@@ -483,13 +537,13 @@ def mppt(h_tot, h_0, order):
     #       extensive use of numpy arrays.
     #######################################################################
     # Let's store the perturbed wave functions in columns of psi_pt
-    psi_pt = np.zeros((nfci,order)) 
+    psi_pt = np.zeros((nfci,order), dtype = complex)
     # Let's store the perturbed energies in another array
     e_pt   = np.zeros(order)
 
     # Define zeroth-order energy and wave function
     psi_pt[0,0] = 1
-    e_pt[0] = np.einsum('j,jk,k',psi_pt[:,0],h_0,psi_pt[:,0])
+    e_pt[0] = np.real(np.einsum('j,jk,k',psi_pt[:,0],h_0,psi_pt[:,0]))
 
     # Define projector onto non-model space
     # Q = I - |0><0|
@@ -500,14 +554,14 @@ def mppt(h_tot, h_0, order):
 
     # Let's now define the the inverse of the reference Hamiltonian once 
     # R = Q (Q^T ( H_0 - E_0) Q )^{-1} * Q.T 
-    R = Q.dot(np.linalg.inv(Q.T.dot(h_0 - np.identity(nfci) * e_pt[0]).dot(Q))).dot(Q.T)
+    R = Q.dot(np.linalg.inv(Q.T.dot(h_0 - np.identity(nfci) * (e_pt[0]- epsilon*1j)).dot(Q))).dot(Q.T)
 
     # Now get first-order wave function from recursive formula
     for n in range(1,order):
         # Get the wave function correction
         psi_pt[:,n] = - (np.einsum('ij,jk,k->i',R,h_1,psi_pt[:,n-1]) - np.einsum('ij,jk,k->i',R,psi_pt[:,n-1:0:-1],e_pt[1:n]))
         # Get the energy correction
-        e_pt[n]     = psi_pt[:,0].T.dot(h_1).dot(psi_pt[:,n-1])
+        e_pt[n]     = np.real(psi_pt[:,0].T.dot(h_1).dot(psi_pt[:,n-1]))
         #print('{:10d} {:20.10f} {:20.10f}'.format(n,e_pt[n],sum(e_pt[:n+1])))
 
     #######################################################################
@@ -517,6 +571,17 @@ def mppt(h_tot, h_0, order):
     #     e_pt[:]
     #######################################################################
     return psi_pt, e_pt
+
+def srg_2(h_tot, h_0, s):
+    h_1 = h_tot - h_0 
+    nfci = h_tot.shape[0]
+    e2 = 0
+    for i in range(1,nfci):
+        delta = h_0[0,0] - h_0[i,i]
+        e2+= h_1[0,i]**2/delta *(1-np.exp(-2*s*(delta**2)))
+    e2 = e2/2
+    e = h_tot[0,0] + e2
+    return e
 
 def different_lambda(corr_list, l):
     '''
@@ -569,7 +634,7 @@ def plot_e(e):
     plt.plot(x,e)
     plt.xlabel("Correction order")
     plt.ylabel("Energy correction")
-    plt.title("Energy corrections for H2 bond length = 0.74 Angstrom")
+    plt.title("Energy corrections for H2 bond length = 0.74 Angstrom in 6-31G")
     plt.show()
 
 def get_degeneracies(h_0, h_1):
@@ -627,10 +692,6 @@ def degenerate_pt(h_tot, h_0, order):
         for j in range(n):
             for k in range(n):
                 eigenvalues[i[j],i[k]] = eigvec[j,k]
-        print('Trans')
-        print(eigenvalues)
-        print(eigenvalues[20])
-        print(eigvec)
         h_tot_new = eigenvalues.T.dot(h_tot).dot(eigenvalues)
         h_0_new = eigenvalues.T.dot(h_0).dot(eigenvalues)
         #print('New h')
@@ -653,5 +714,151 @@ def degenerate_pt(h_tot, h_0, order):
             psi, e = mppt(htot, h0, order)
             print(e)
             psi_pt.append(psi)
-            e_pt.append(e)
+            e_pt.append(list(e))
     return psi_pt, e_pt
+
+def enpt(h_tot, order):
+    '''
+    Performs the perturbation theory with the Epstein-Nesbet partitioning.
+    Arguments:
+        h_tot - full Hamiltonian in the Hilbert space
+        order - the numberof corrections that will be calculated
+        epsilon - level shift
+    Returns:
+        psi - list of all the eigenstate corrections, starting with the unperturbed eigenstate
+        e - list of all energy corrections, starting with 0th order.
+    '''
+    # Get the dimensions of the FCI Hilbert space
+    nfci = h_tot.shape[0]
+
+    # Get perturbation Hamiltonian
+    d =  np.diag(h_tot)
+    h_0 = np.diagflat(d)
+    h_1 = h_tot - h_0
+
+    #######################################################################
+    # HGAB: Here is a modified recursive approach which uses the recursive
+    #       formula for everything including |psi_1>, and also makes more 
+    #       extensive use of numpy arrays.
+    #######################################################################
+    # Let's store the perturbed wave functions in columns of psi_pt
+    psi_pt = np.zeros((nfci,order), dtype = complex)
+    # Let's store the perturbed energies in another array
+    e_pt   = np.zeros(order)
+
+    # Define zeroth-order energy and wave function
+    psi_pt[0,0] = 1
+    e_pt[0] = np.real(np.einsum('j,jk,k',psi_pt[:,0],h_0,psi_pt[:,0]))
+
+    # Define projector onto non-model space
+    # Q = I - |0><0|
+    Proj = np.identity(nfci) - psi_pt[:,[0]].dot(psi_pt[:,[0]].T)
+    s,u  = np.linalg.eigh(Proj) # Here are our eigenvalues and eigenvectors of Proj
+    proj_ind = np.argwhere(s==1).flatten() # We want the non-null eigenvectors
+    Q = u[:,proj_ind] # We then extract out the corresponding eigenvalues
+
+    # Let's now define the the inverse of the reference Hamiltonian once 
+    # R = Q (Q^T ( H_0 - E_0) Q )^{-1} * Q.T 
+    R = Q.dot(np.linalg.inv(Q.T.dot(h_0 - np.identity(nfci) * e_pt[0]).dot(Q))).dot(Q.T)
+
+    # Now get first-order wave function from recursive formula
+    for n in range(1,order):
+        # Get the wave function correction
+        psi_pt[:,n] = - (np.einsum('ij,jk,k->i',R,h_1,psi_pt[:,n-1]) - np.einsum('ij,jk,k->i',R,psi_pt[:,n-1:0:-1],e_pt[1:n]))
+        # Get the energy correction
+        e_pt[n]     = np.real(psi_pt[:,0].T.dot(h_1).dot(psi_pt[:,n-1]))
+        #print('{:10d} {:20.10f} {:20.10f}'.format(n,e_pt[n],sum(e_pt[:n+1])))
+
+    #######################################################################
+    # Our final wave functions are stored in the columns of 
+    #     psi_pt[:,:]
+    # and our MPn corrections are stored in the elements of 
+    #     e_pt[:]
+    #######################################################################
+    return psi_pt, e_pt
+
+def get_dyson(mo_fock, mo_integrals, perm):
+    fock_diag  = np.diag(mo_fock)
+    nmo = len(fock_diag)
+    dyson_diag = np.copy(fock_diag)
+
+    # Initialise many-body Fock matrix
+    n = len(perm)
+    dyson        = np.zeros((n,n))
+    ref = perm[0]
+    ref_a = np.asarray(ref[0]) 
+    ref_b = np.asarray(ref[1])
+
+    # Find occupied orbitals 
+    occa = list(np.argwhere(ref_a).flatten())
+    occb = list(np.argwhere(ref_b).flatten())
+    occ = occa + occb
+    orb = range(nmo)
+    neocc = []
+    for i in orb:
+        orb_copy = occ.copy()
+        if i in orb_copy:
+            orb_copy.remove(i)
+        if i not in occ:
+            neocc.append(i)
+    for i in orb:
+        orb_copy = occ.copy()
+        if i in orb_copy:
+            orb_copy.remove(i)
+        for a in occ:
+            for p in neocc:
+                for b in occ:
+                    dyson_diag[i] +=((mo_integrals[i,a,p,b]-mo_integrals[i,p,a,b])**2)/(2*(fock_diag[i]+fock_diag[p]-fock_diag[a]-fock_diag[b]))
+    for i in orb:
+        orb_copy = occ.copy()
+        if i in orb_copy:
+            orb_copy.remove(i)
+        for p in neocc:
+            for a in occ:
+                for q in neocc:
+                    dyson_diag[i] +=((mo_integrals[i,p,a,q]-mo_integrals[i,a,p,q])**2)/(2*(fock_diag[i]+fock_diag[a]-fock_diag[p]-fock_diag[q]))
+
+    for ibra, perm_bra in enumerate(perm):
+        # Get this permutation
+        pbra_a = np.asarray(perm_bra[0]) 
+        pbra_b = np.asarray(perm_bra[1])
+
+        # Find occupied orbitals 
+        occa = np.argwhere(pbra_a).flatten()
+        occb = np.argwhere(pbra_b).flatten()
+
+        # Get diagonal Fock terms
+        dyson[ibra,ibra] = np.sum(dyson_diag[occa]) + np.sum(dyson_diag[occb])
+    return dyson
+
+def coupled_pt(h_tot, h_0, order, state):
+    '''
+    Identifies all states that are degenerate in H0 and performs degenerate perturbation theory for
+    all groups of degeneracy. Returns a a list with energy corrections for all states + list with all
+    eigenstate corrections.
+    '''
+    h_1 = h_tot-h_0
+    nfci = h_0.shape[0]
+    eigenvalues = np.identity(nfci)
+    group = [0, state]
+    eigval, eigvec = get_deg_zeroth(h_0, h_1, group)
+    print(eigval)
+    print(eigvec)
+    n = len(group)
+    for j in range(n):
+        for k in range(n):
+            eigenvalues[group[j],group[k]] = eigvec[j,k]
+    h_tot_new = eigenvalues.T.dot(h_tot).dot(eigenvalues)
+    h_0_new = eigenvalues.T.dot(h_0).dot(eigenvalues)
+    h0 = np.copy(h_0_new)
+    htot = np.copy(h_tot_new)
+    h0 = np.delete(h0, 0, 0)
+    h0 = np.delete(h0, 0, 1)
+    htot = np.delete(htot, 0, 0)
+    htot = np.delete(htot, 0, 1)  
+    h0[:,[0, state-1]] = h0[:,[state-1, 0]]
+    h0[[0, state-1],:] = h0[[state-1, 0],:]
+    htot[:,[0, state-1]] = htot[:,[state-1, 0]]
+    htot[[0, state-1],:] = htot[[state-1, 0],:]
+    psi, e = mppt(htot, h0, order, 0)
+    return psi, e
